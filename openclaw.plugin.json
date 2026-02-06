@@ -1,0 +1,28 @@
+{
+  "id": "prompt-monitor",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable the prompt monitor plugin"
+      },
+      "cacheDir": {
+        "type": "string",
+        "description": "Directory to save prompt logs (supports ~). Default: system temp dir, cleared on reboot"
+      },
+      "saveBeforeHook": {
+        "type": "boolean",
+        "default": true,
+        "description": "Save prompt before before_agent_start hooks (Reply layer output)"
+      },
+      "saveAfterHook": {
+        "type": "boolean",
+        "default": true,
+        "description": "Save final prompt actually sent to the model (includes prependContext from hooks)"
+      }
+    }
+  }
+}
