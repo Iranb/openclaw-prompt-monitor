@@ -8,10 +8,14 @@ Records prompts at two stages and saves them to a configurable cache directory:
 ## Installation
 
 ```bash
-openclaw plugins install ./extensions/prompt-monitor
+openclaw plugins install Iranb/openclaw-prompt-monitor
 ```
 
-Or from workspace: the plugin is already in `extensions/prompt-monitor`.
+Or 
+
+```bash
+openclaw plugins install https://github.com/Iranb/openclaw-prompt-monitor
+```
 
 ## Configuration
 
