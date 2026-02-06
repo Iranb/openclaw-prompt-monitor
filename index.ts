@@ -32,23 +32,34 @@ function sanitizeSessionKey(sessionKey: string): string {
   return sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "unknown";
 }
 
-function extractLastUserPrompt(messages: unknown[]): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
+function extractTextFromContent(content: unknown): string | undefined {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const texts: string[] = [];
+    for (const block of content) {
+      const b = block as { type?: string; text?: string };
+      if (b?.type === "text" && typeof b?.text === "string") texts.push(b.text);
+    }
+    return texts.join("\n") || undefined;
+  }
+  return undefined;
+}
+
+function extractUserPrompts(messages: unknown[]): { last?: string; first?: string } {
+  let first: string | undefined;
+  let last: string | undefined;
+  for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (!msg || typeof msg !== "object") continue;
     const m = msg as { role?: string; content?: unknown };
     if (m.role !== "user") continue;
-    if (typeof m.content === "string") return m.content;
-    if (Array.isArray(m.content)) {
-      const texts: string[] = [];
-      for (const block of m.content) {
-        const b = block as { type?: string; text?: string };
-        if (b?.type === "text" && typeof b?.text === "string") texts.push(b.text);
-      }
-      return texts.join("\n") || undefined;
+    const text = extractTextFromContent(m.content);
+    if (text) {
+      if (first === undefined) first = text;
+      last = text;
     }
   }
-  return undefined;
+  return { first, last };
 }
 
 async function ensureDir(dir: string): Promise<void> {
@@ -76,9 +87,15 @@ export default function (api: OpenClawPluginApi) {
   const saveBeforeHook = cfg.saveBeforeHook !== false;
   const saveAfterHook = cfg.saveAfterHook !== false;
   const cacheDirRaw = cfg.cacheDir?.trim();
-  const cacheDir = cacheDirRaw
-    ? api.resolvePath(cacheDirRaw)
-    : path.join(os.tmpdir(), "openclaw-prompt-monitor");
+  let cacheDir: string;
+  try {
+    cacheDir = cacheDirRaw
+      ? api.resolvePath(cacheDirRaw)
+      : path.join(os.tmpdir(), "openclaw-prompt-monitor");
+  } catch (err) {
+    api.logger?.warn?.(`prompt-monitor: invalid cacheDir, using temp: ${String(err)}`);
+    cacheDir = path.join(os.tmpdir(), "openclaw-prompt-monitor");
+  }
 
   if (!enabled) {
     api.logger?.info?.("prompt-monitor: disabled via config");
@@ -86,34 +103,31 @@ export default function (api: OpenClawPluginApi) {
   }
 
   api.on("before_agent_start", async (event, ctx) => {
-    if (!saveBeforeHook || !event.prompt) return;
-    const sessionKey = ctx.sessionKey ?? "unknown";
-    const timestamp = Date.now();
-    pendingBySession.set(sessionKey, { prompt: event.prompt, timestamp });
+    try {
+      if (!saveBeforeHook || !event.prompt) return;
+      const sessionKey = ctx.sessionKey ?? "unknown";
+      const timestamp = Date.now();
+      pendingBySession.set(sessionKey, { prompt: event.prompt, timestamp });
+      // Save immediately so we capture the prompt even if agent_end never runs
+      writePromptFile(cacheDir, sessionKey, timestamp, "before", event.prompt).catch((err) =>
+        api.logger?.warn?.(`prompt-monitor: failed to save before-hook prompt: ${String(err)}`),
+      );
+    } catch (err) {
+      api.logger?.warn?.(`prompt-monitor: before_agent_start failed: ${String(err)}`);
+    }
   });
 
   api.on("agent_end", async (event, ctx) => {
-    if (!saveAfterHook && !saveBeforeHook) return;
+    if (!saveAfterHook) return;
     const sessionKey = ctx.sessionKey ?? "unknown";
     const pending = pendingBySession.get(sessionKey);
     pendingBySession.delete(sessionKey);
-
     const timestamp = pending?.timestamp ?? Date.now();
 
     try {
-      if (saveBeforeHook && pending) {
-        const filePath = await writePromptFile(
-          cacheDir,
-          sessionKey,
-          timestamp,
-          "before",
-          pending.prompt,
-        );
-        api.logger?.debug?.(`prompt-monitor: saved before-hook prompt to ${filePath}`);
-      }
-
       if (saveAfterHook && event.messages?.length) {
-        const finalPrompt = extractLastUserPrompt(event.messages);
+        const { last, first } = extractUserPrompts(event.messages);
+        const finalPrompt = last ?? first;
         if (finalPrompt !== undefined) {
           const filePath = await writePromptFile(
             cacheDir,
