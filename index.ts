@@ -87,11 +87,10 @@ export default function (api: OpenClawPluginApi) {
   const saveBeforeHook = cfg.saveBeforeHook !== false;
   const saveAfterHook = cfg.saveAfterHook !== false;
   const cacheDirRaw = cfg.cacheDir?.trim();
+  const defaultCacheDir = "~/.openclaw/cache/prompt-monitor";
   let cacheDir: string;
   try {
-    cacheDir = cacheDirRaw
-      ? api.resolvePath(cacheDirRaw)
-      : path.join(os.tmpdir(), "openclaw-prompt-monitor");
+    cacheDir = cacheDirRaw ? api.resolvePath(cacheDirRaw) : api.resolvePath(defaultCacheDir);
   } catch (err) {
     api.logger?.warn?.(`prompt-monitor: invalid cacheDir, using temp: ${String(err)}`);
     cacheDir = path.join(os.tmpdir(), "openclaw-prompt-monitor");
@@ -101,6 +100,8 @@ export default function (api: OpenClawPluginApi) {
     api.logger?.info?.("prompt-monitor: disabled via config");
     return;
   }
+
+  api.logger?.info?.(`prompt-monitor: saving prompts to ${cacheDir}`);
 
   api.on("before_agent_start", async (event, ctx) => {
     try {
@@ -125,19 +126,20 @@ export default function (api: OpenClawPluginApi) {
     const timestamp = pending?.timestamp ?? Date.now();
 
     try {
-      if (saveAfterHook && event.messages?.length) {
-        const { last, first } = extractUserPrompts(event.messages);
-        const finalPrompt = last ?? first;
-        if (finalPrompt !== undefined) {
-          const filePath = await writePromptFile(
-            cacheDir,
-            sessionKey,
-            timestamp,
-            "after",
-            finalPrompt,
-          );
-          api.logger?.debug?.(`prompt-monitor: saved after-hook prompt to ${filePath}`);
-        }
+      // Prefer effectivePrompt (exact user prompt sent to model) over extracting from messages
+      const evt = event as { effectivePrompt?: string; messages?: unknown[] };
+      const { last, first } = extractUserPrompts(evt.messages ?? []);
+      const fallback = last ?? first;
+      const finalPrompt = evt.effectivePrompt?.trim() || fallback;
+      if (finalPrompt !== undefined) {
+        const filePath = await writePromptFile(
+          cacheDir,
+          sessionKey,
+          timestamp,
+          "after",
+          finalPrompt,
+        );
+        api.logger?.debug?.(`prompt-monitor: saved after-hook prompt to ${filePath}`);
       }
     } catch (err) {
       api.logger?.warn?.(`prompt-monitor: failed to save prompt: ${String(err)}`);
